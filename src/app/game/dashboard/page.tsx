@@ -32,10 +32,8 @@ export default function DashboardPage() {
   }>>([]);
 
   useEffect(() => {
-    if (!user) {
-      router.push('/auth/login');
-      return;
-    }
+    // Login check removed to allow anonymous access
+    // User-specific data will be fetched only if user is available
     
     const fetchUserData = async () => {
       try {
@@ -62,8 +60,12 @@ export default function DashboardPage() {
       }
     };
     
-    fetchUserData();
-  }, [user, router]);
+    if (user) { // Fetch data only if user is logged in
+      fetchUserData();
+    } else {
+      setLoading(false); // Stop loading if no user, show default/empty state
+    }
+  }, [user, router]); // Keep user in deps to refetch if they log in
 
   const handleSignOut = async () => {
     try {

@@ -42,16 +42,15 @@ export default function GamePlayPage() {
     audience: true,
     phone: true,
   });
+  const [hiddenOptions, setHiddenOptions] = useState<number[]>([]);
+  const [usedQuestionIds, setUsedQuestionIds] = useState<Set<string>>(new Set());
   const [timer, setTimer] = useState(30);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAnswer, setShowAnswer] = useState(false);
 
   useEffect(() => {
-    if (!user) {
-      router.push('/auth/login');
-      return;
-    }
+    // Login check removed to allow anonymous play
     
     // Debug: Log the raw questions import
     console.log('=== DEBUG: Raw questions import ===');
@@ -59,7 +58,7 @@ export default function GamePlayPage() {
     console.log('Raw questions value:', rawQuestions);
     
     loadGame();
-  }, [user, router]);
+  }, [router]); // User removed from dependency array
 
   // Timer effect
   useEffect(() => {
@@ -108,7 +107,6 @@ export default function GamePlayPage() {
       
       console.log('=== DEBUG: getQuestionForLevel ===');
       console.log(`Level: ${level}, Target Difficulty: ${targetDifficulty}`);
-      console.log('Current questions state:', questions);
       
       if (!questions || !Array.isArray(questions)) {
         console.error('Questions is not an array or is undefined:', questions);
@@ -117,66 +115,63 @@ export default function GamePlayPage() {
       
       console.log(`Total questions available: ${questions.length}`);
       
-      // Log all available difficulties
-      const allDifficulties = [...new Set(questions.map(q => q.difficulty))].sort();
-      console.log('All available difficulties:', allDifficulties);
+      // Get all questions for this difficulty level that haven't been used yet
+      const availableQuestions = questions.filter(q => 
+        q.difficulty === targetDifficulty && !usedQuestionIds.has(q.id)
+      );
       
-      // Get all questions for this difficulty level
-      const levelQuestions = questions.filter(q => {
-        const matches = q.difficulty === targetDifficulty;
-        if (matches) {
-          console.log(`Found matching question (difficulty ${q.difficulty}):`, q.question_text);
-        }
-        return matches;
-      });
+      console.log(`Found ${availableQuestions.length} available questions for difficulty ${targetDifficulty}`);
       
-      console.log(`Found ${levelQuestions.length} questions for difficulty ${targetDifficulty}`);
-      
-      if (levelQuestions.length === 0) {
-        // If no questions found for exact difficulty, try to find the closest one
-        console.warn(`No questions found for difficulty ${targetDifficulty}, trying to find closest match...`);
+      // If no available questions for this difficulty, try to find any unused question
+      if (availableQuestions.length === 0) {
+        console.warn(`No unused questions found for difficulty ${targetDifficulty}, trying to find any unused question...`);
         
-        if (allDifficulties.length > 0) {
-          const closestDiff = allDifficulties.reduce((prev, curr) => 
-            Math.abs(curr - targetDifficulty) < Math.abs(prev - targetDifficulty) ? curr : prev
+        // Find all unused questions from any difficulty
+        const allUnusedQuestions = questions.filter(q => !usedQuestionIds.has(q.id));
+        
+        if (allUnusedQuestions.length > 0) {
+          // If we have unused questions, find the one with closest difficulty
+          const sortedByDifficulty = [...allUnusedQuestions].sort((a, b) => 
+            Math.abs(a.difficulty - targetDifficulty) - Math.abs(b.difficulty - targetDifficulty)
           );
-          console.warn(`Using questions from difficulty ${closestDiff} instead`);
-          const closestQuestions = questions.filter(q => q.difficulty === closestDiff);
-          if (closestQuestions.length > 0) {
-            const randomIndex = Math.floor(Math.random() * closestQuestions.length);
-            return closestQuestions[randomIndex];
+          
+          if (sortedByDifficulty.length > 0) {
+            console.warn(`Using question from difficulty ${sortedByDifficulty[0].difficulty} instead`);
+            return sortedByDifficulty[0];
+          }
+        } else {
+          // If all questions have been used, reset the used questions set
+          console.warn('All questions have been used, resetting used questions');
+          setUsedQuestionIds(new Set());
+          
+          // Return a random question of the target difficulty
+          const freshQuestions = questions.filter(q => q.difficulty === targetDifficulty);
+          if (freshQuestions.length > 0) {
+            const randomIndex = Math.floor(Math.random() * freshQuestions.length);
+            return freshQuestions[randomIndex];
           }
         }
         
-        console.error('No questions available for any difficulty level');
+        console.error('No questions available');
         return null;
       }
       
       // Select a random question from the available ones for this level
-      const randomIndex = Math.floor(Math.random() * levelQuestions.length);
-      const question = levelQuestions[randomIndex];
-      
-      console.log('Selected question:', {
-        text: question.question_text,
-        difficulty: question.difficulty,
-        options: question.options
-      });
-      
-      return question;
+      const randomIndex = Math.floor(Math.random() * availableQuestions.length);
+      return availableQuestions[randomIndex];
     } catch (error) {
       console.error('Error in getQuestionForLevel:', error);
       return null;
     }
   };
 
-  const transformQuestion = (q: any) => ({
-    id: q.id || `q-${Math.random().toString(36).substr(2, 9)}`,
-    question_text: q.question_text,
-    options: [q.option_a, q.option_b, q.option_c, q.option_d],
-    correct_answer: q.correct_option, // Already 0-based (0 = A, 1 = B, etc.)
-    difficulty: q.difficulty,
-    category: q.category
-  });
+  const transformQuestion = (q: any) => {
+    return {
+      ...q,
+      options: [q.option_a, q.option_b, q.option_c, q.option_d],
+      correct_answer: q.correct_option
+    };
+  };
 
   const loadGame = async () => {
     try {
@@ -211,25 +206,43 @@ export default function GamePlayPage() {
       // Transform all questions to the expected format
       const allQuestions = rawQuestions.map((q, index) => {
         try {
-          console.log(`Processing question ${index + 1}:`, q);
-          
           // Validate required fields
-          const question = q as any; // Temporary type assertion
           const requiredFields = ['question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_option', 'difficulty'] as const;
-          const missingFields = requiredFields.filter(field => question[field] === undefined || question[field] === null);
+          const missingFields = requiredFields.filter(field => q[field] === undefined || q[field] === null);
           
           if (missingFields.length > 0) {
             throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
           }
           
-          return {
-            id: `q-${Math.random().toString(36).substr(2, 9)}`,
+          // correct_option is already 0-based (0 = A, 1 = B, etc.)
+          const correctAnswerIndex = Number(q.correct_option);
+          
+          // Ensure the correct answer index is valid
+          if (correctAnswerIndex < 0 || correctAnswerIndex > 3) {
+            console.warn(`Invalid correct_answer index ${correctAnswerIndex} for question:`, q.question_text);
+          }
+          
+          // Transform the question to match the expected format
+          const transformedQuestion = {
+            id: `q-${index}`,
             question_text: q.question_text,
             options: [q.option_a, q.option_b, q.option_c, q.option_d],
-            correct_answer: q.correct_option,
-            difficulty: Number(q.difficulty) || 1, // Ensure difficulty is a number
+            correct_answer: correctAnswerIndex,
+            difficulty: q.difficulty,
             category: q.category || 'General'
           };
+          
+          // Debug log for the first few questions
+          if (index < 5) {
+            console.log(`Transformed question ${index}:`, {
+              question: transformedQuestion.question_text,
+              options: transformedQuestion.options,
+              correct_answer: transformedQuestion.correct_answer,
+              correct_option: transformedQuestion.options[transformedQuestion.correct_answer]
+            });
+          }
+          
+          return transformedQuestion;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
           console.error(`Error processing question at index ${index}:`, error, { question: q });
@@ -242,25 +255,17 @@ export default function GamePlayPage() {
       // Update state with the transformed questions
       setQuestions(allQuestions);
       
-      // Small delay to ensure state is updated
-      setTimeout(() => {
-        try {
-          console.log('Loading first question...');
-          const firstQuestion = getQuestionForLevel(0);
-          
-          if (!firstQuestion) {
-            throw new Error('No question found for the first level');
-          }
-          
-          console.log('First question loaded:', firstQuestion);
-          setCurrentQuestion(firstQuestion);
-          setGameState('playing');
-          setTimer(30);
-        } catch (error) {
-          console.error('Error setting first question:', error);
-          setGameState('error');
-        }
-      }, 100);
+      // Get the first question
+      const firstQuestion = allQuestions.find(q => q.difficulty === 1);
+      
+      if (!firstQuestion) {
+        throw new Error('No question found for the first level (difficulty 1)');
+      }
+      
+      console.log('First question loaded:', firstQuestion);
+      setCurrentQuestion(firstQuestion);
+      setGameState('playing');
+      setTimer(30);
       
     } catch (error) {
       console.error('Error loading game:', error);
@@ -274,10 +279,14 @@ export default function GamePlayPage() {
     const nextQuestion = getQuestionForLevel(newLevel);
     
     if (nextQuestion) {
-      // Reset processing state and timer
+      // Mark this question as used
+      setUsedQuestionIds(prev => new Set(prev).add(nextQuestion.id));
+      
+      // Reset processing state, timer, and hidden options
       setIsProcessing(false);
       setSelectedAnswer(null);
       setShowAnswer(false);
+      setHiddenOptions([]); // Reset hidden options for the new question
       
       // Reset the timer before setting the new question
       setTimer(30);
@@ -285,7 +294,7 @@ export default function GamePlayPage() {
       // Set the new question
       setCurrentQuestion(nextQuestion);
       
-      console.log(`Loaded question for level ${newLevel + 1}`);
+      console.log(`Loaded question for level ${newLevel + 1} (ID: ${nextQuestion.id})`);
     } else {
       console.log('No more questions, game won!');
       setGameState('won');
@@ -294,6 +303,12 @@ export default function GamePlayPage() {
 
   const handleAnswerSelect = async (index: number) => {
     if (selectedAnswer !== null || !currentQuestion || isProcessing) return;
+    
+    console.log('Answer selected:', {
+      selectedIndex: index,
+      correctAnswer: currentQuestion.correct_answer,
+      options: currentQuestion.options
+    });
     
     // Set initial processing state
     setIsProcessing(true);
@@ -309,29 +324,36 @@ export default function GamePlayPage() {
     // Wait 3 seconds to show the answer
     await new Promise(resolve => setTimeout(resolve, 3000));
     
-    // Check if answer is correct
-    const isCorrect = index === currentQuestion.correct_answer;
-    
-    if (isCorrect) {
-      // Correct answer - move to next level
-      const nextLevel = currentLevel + 1;
+    try {
+      // Check if answer is correct
+      const isCorrect = index === currentQuestion.correct_answer;
+      console.log('Answer check:', { isCorrect, selectedIndex: index, correctIndex: currentQuestion.correct_answer });
       
-      if (nextLevel < PRIZES.length) {
-        // Move to next level
-        setCurrentLevel(nextLevel);
-        loadNextLevel(nextLevel);
+      if (isCorrect) {
+        // Correct answer - move to next level
+        const nextLevel = currentLevel + 1;
+        
+        if (nextLevel < PRIZES.length) {
+          // Move to next level
+          setCurrentLevel(nextLevel);
+          loadNextLevel(nextLevel);
+        } else {
+          // Player won the game (reached the last level)
+          setGameState('won');
+        }
       } else {
-        // Player won the game (reached the last level)
-        setGameState('won');
+        // Wrong answer - game over
+        setGameState('lost');
       }
-    } else {
-      // Wrong answer - game over
+    } catch (error) {
+      console.error('Error in answer selection:', error);
+      // If there's an error, default to wrong answer
       setGameState('lost');
+    } finally {
+      // Reset states
+      setShowAnswer(false);
+      setIsProcessing(false);
     }
-    
-    // Reset states
-    setShowAnswer(false);
-    setIsProcessing(false);
   };
 
   const handleTimeUp = () => {
@@ -347,17 +369,23 @@ export default function GamePlayPage() {
   const useFiftyFifty = () => {
     if (!lifelines.fiftyFifty || !currentQuestion) return;
     
-    const { options, correct_answer } = currentQuestion;
-    let incorrectOptions = options
-      .map((_, index) => index)
-      .filter(i => i !== correct_answer);
+    const { correct_answer } = currentQuestion;
     
-    // Randomly remove one incorrect option
-    const randomIndex = Math.floor(Math.random() * incorrectOptions.length);
-    incorrectOptions.splice(randomIndex, 1);
+    // Get all incorrect options (indices)
+    const incorrectOptions = [0, 1, 2, 3].filter(i => i !== correct_answer);
     
-    // In a real implementation, you would highlight the remaining options
+    // Randomly select two incorrect options to remove
+    const optionsToRemove: number[] = [];
+    while (optionsToRemove.length < 2 && incorrectOptions.length > 0) {
+      const randomIndex = Math.floor(Math.random() * incorrectOptions.length);
+      optionsToRemove.push(incorrectOptions.splice(randomIndex, 1)[0]);
+    }
+    
+    // Update state to hide these options
+    setHiddenOptions(optionsToRemove);
     setLifelines(prev => ({ ...prev, fiftyFifty: false }));
+    
+    console.log('50:50 used - hiding options:', optionsToRemove);
   };
 
   const useAudience = () => {
@@ -384,14 +412,17 @@ export default function GamePlayPage() {
 
   const restartGame = () => {
     setCurrentLevel(0);
+    setGameState('loading');
     setSelectedAnswer(null);
+    setShowAnswer(false);
+    setHiddenOptions([]);
+    setUsedQuestionIds(new Set()); // Reset used questions
     setLifelines({
       fiftyFifty: true,
       audience: true,
       phone: true,
     });
-    setTimer(30);
-    setGameState('playing');
+    loadGame();
   };
 
   if (gameState === 'loading') {
@@ -527,6 +558,11 @@ export default function GamePlayPage() {
               <CardContent>
                 <div className="grid grid-cols-2 gap-4">
                   {currentQuestion?.options.map((option, index) => {
+                    // Skip rendering if this option is in hiddenOptions (unless it's the selected answer)
+                    if (hiddenOptions.includes(index) && selectedAnswer !== index) {
+                      return null;
+                    }
+                    
                     // Determine if this is the first or second item in its row
                     const isFirstInRow = index % 2 === 0;
                     const isLastInRow = index % 2 === 1;

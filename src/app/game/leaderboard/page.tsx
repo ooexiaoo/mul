@@ -23,12 +23,9 @@ export default function LeaderboardPage() {
   const [timeRange, setTimeRange] = useState<'all' | 'month' | 'week'>('all');
 
   useEffect(() => {
-    if (!user) {
-      router.push('/auth/login');
-      return;
-    }
+    // Login check removed to allow anonymous access
     fetchLeaderboard();
-  }, [user, router, timeRange]);
+  }, [router, timeRange]); // User removed from dependency array, leaderboard is public
 
   const fetchLeaderboard = async () => {
     try {
